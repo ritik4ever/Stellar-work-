@@ -82,6 +82,7 @@ Represents the operational state of a retainer agreement.
 - `RateLimitConfig`: Instance key storing current `RateLimitConfig`.
 - `Retainer(u64)`: Persistent key storing `Retainer` records by ID.
 - `CrossChainJob(u64)`: Persistent key storing `CrossChainJob` records by ID.
+- `ImportedSourceIdentity(String, Address, u64)`: Persistent key preventing repeat imports for a source chain, origin contract, and source job ID tuple.
 - `RateLimitState(Address)`: Persistent key storing per-address rate limiting state with automatic TTL extension.
 - `TrustedAddress(Address)`: Persistent boolean flag identifying rate-limit exempt callers.
 
@@ -100,6 +101,8 @@ Represents the operational state of a retainer agreement.
 | `7` | `NotInitialized` | Contract has not yet been initialized. |
 | `8` | `InvalidRateLimitConfig` | Invalid rate limit configuration (both fields must be 0 or >0; max window 30 days). |
 | `9` | `RateLimitExceeded` | Invocations in the current window exceeded `max_calls`. |
+| `10` | `AlreadyImported` | The cross-chain job record has already been imported. |
+| `11` | `DuplicateSourceIdentity` | The source chain, origin contract, and source job ID have already been imported. |
 
 ---
 
@@ -212,7 +215,8 @@ pub fn import_job(
 ) -> Result<u64, Error>
 ```
 - **Auth**: `admin.require_auth()` via `require_admin`.
-- **Errors**: `Error::NotFound`.
+- **Errors**: `Error::NotFound`, `Error::AlreadyImported`, `Error::DuplicateSourceIdentity`.
+- A source identity is the tuple `(source_chain, origin_contract, source_job_id)`. Repeated imports of a record or a previously imported source identity are rejected without emitting another import event.
 - **Events**: `("j_import",)` with data `(cross_chain_id, source_chain, source_job_id, freelancer, amount)`.
 
 ---

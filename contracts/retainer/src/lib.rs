@@ -22,6 +22,8 @@ pub enum Error {
     NotInitialized = 7,
     InvalidRateLimitConfig = 8,
     RateLimitExceeded = 9,
+    AlreadyImported = 10,
+    DuplicateSourceIdentity = 11,
 }
 
 #[contracttype]
@@ -86,6 +88,7 @@ pub enum DataKey {
     RateLimitConfig,
     RateLimitState(Address),
     TrustedAddress(Address),
+    ImportedSourceIdentity(String, Address, u64),
 }
 
 fn require_admin(env: &Env, admin: &Address) -> Result<(), Error> {
@@ -363,10 +366,24 @@ impl RetainerContract {
             .persistent()
             .get(&DataKey::CrossChainJob(cross_chain_id))
             .ok_or(Error::NotFound)?;
+        if cross.imported {
+            return Err(Error::AlreadyImported);
+        }
+        let identity_key = DataKey::ImportedSourceIdentity(
+            source_chain.clone(),
+            cross.origin_contract.clone(),
+            source_job_id,
+        );
+        if env.storage().persistent().has(&identity_key) {
+            return Err(Error::DuplicateSourceIdentity);
+        }
         cross.imported = true;
         env.storage()
             .persistent()
             .set(&DataKey::CrossChainJob(cross_chain_id), &cross);
+        env.storage()
+            .persistent()
+            .set(&identity_key, &cross_chain_id);
         env.events().publish(
             (symbol_short!("j_import"),),
             (
@@ -579,6 +596,136 @@ mod test {
         );
         let cross = client.get_cross_chain_job(&cc_id);
         assert!(cross.imported);
+    }
+
+    #[test]
+    fn test_import_rejects_replay_without_emitting_another_event() {
+        let (env, client, admin, _, freelancer) = setup();
+        let token = Address::generate(&env);
+        let target = Address::generate(&env);
+        let source_chain = String::from_str(&env, "futurenet");
+        let cc_id = client.export_job(
+            &admin,
+            &1u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &source_chain,
+            &target,
+        );
+
+        client.import_job(
+            &admin,
+            &cc_id,
+            &source_chain,
+            &1u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+        );
+        let events_after_import = env.events().all().len();
+
+        let retry = client.try_import_job(
+            &admin,
+            &cc_id,
+            &source_chain,
+            &1u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+        );
+        assert!(matches!(retry, Err(Ok(Error::AlreadyImported))));
+        assert_eq!(env.events().all().len(), events_after_import);
+        assert!(client.get_cross_chain_job(&cc_id).imported);
+    }
+
+    #[test]
+    fn test_import_rejects_duplicate_source_identity() {
+        let (env, client, admin, _, freelancer) = setup();
+        let token = Address::generate(&env);
+        let target = Address::generate(&env);
+        let other_target = Address::generate(&env);
+        let source_chain = String::from_str(&env, "futurenet");
+        let cross_chain_id = client.export_job(
+            &admin,
+            &1u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &source_chain,
+            &target,
+        );
+        let duplicate_id = client.export_job(
+            &admin,
+            &1u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &source_chain,
+            &target,
+        );
+        let other_origin_id = client.export_job(
+            &admin,
+            &1u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &source_chain,
+            &other_target,
+        );
+        let other_chain = String::from_str(&env, "polygon");
+
+        client.import_job(
+            &admin,
+            &cross_chain_id,
+            &source_chain,
+            &42u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+        );
+        let events_after_import = env.events().all().len();
+
+        let duplicate = client.try_import_job(
+            &admin,
+            &duplicate_id,
+            &source_chain,
+            &42u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+        );
+        assert!(matches!(duplicate, Err(Ok(Error::DuplicateSourceIdentity))));
+        assert_eq!(env.events().all().len(), events_after_import);
+        assert!(!client.get_cross_chain_job(&duplicate_id).imported);
+
+        client.import_job(
+            &admin,
+            &other_origin_id,
+            &source_chain,
+            &42u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+        );
+        let other_chain_id = client.export_job(
+            &admin,
+            &1u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+            &source_chain,
+            &target,
+        );
+        client.import_job(
+            &admin,
+            &other_chain_id,
+            &other_chain,
+            &42u64,
+            &freelancer,
+            &1_000_000i128,
+            &token,
+        );
     }
 
     #[test]
