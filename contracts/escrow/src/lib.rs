@@ -476,6 +476,8 @@ pub enum ExtKey {
     FreelancerRatingSum(Address),
     /// Count of ratings received by a freelancer.
     FreelancerRatingCount(Address),
+    /// Rating submitted by the client for a completed freelancer engagement.
+    FreelancerJobRating(u64),
     /// SC-138: maps a job metadata hash to the IPFS CID v1 string of the
     /// off-chain metadata document it corresponds to.
     MetadataCidMapping(BytesN<32>),
@@ -3728,17 +3730,46 @@ impl EscrowContract {
             .unwrap_or(true)
     }
 
-    pub fn rate_freelancer(e: Env, caller: Address, freelancer: Address, rating: u32) {
+    pub fn rate_freelancer(
+        e: Env,
+        caller: Address,
+        freelancer: Address,
+        job_id: u64,
+        rating: u32,
+    ) {
         caller.require_auth();
         if rating == 0 || rating > 500 {
             panic_with_error!(&e, Error::InvalidRating);
         }
+
+        let job = get_job_or_panic(&e, job_id);
+        if job.status != JobStatus::Completed {
+            panic_with_error!(&e, Error::InvalidStatus);
+        }
+        if caller == freelancer
+            || caller != job.client
+            || job.freelancer != Option::Some(freelancer.clone())
+        {
+            panic_with_error!(&e, Error::Unauthorized);
+        }
+
+        let job_rating_key = ExtKey::FreelancerJobRating(job_id);
+        if e.storage().persistent().has(&job_rating_key) {
+            panic_with_error!(&e, Error::InvalidRating);
+        }
+
         let sum_key = ExtKey::FreelancerRatingSum(freelancer.clone());
         let count_key = ExtKey::FreelancerRatingCount(freelancer.clone());
         let prev_sum: u32 = e.storage().persistent().get(&sum_key).unwrap_or(0u32);
         let prev_count: u32 = e.storage().persistent().get(&count_key).unwrap_or(0u32);
         let new_sum = prev_sum.saturating_add(rating);
         let new_count = prev_count.saturating_add(1);
+        e.storage().persistent().set(&job_rating_key, &rating);
+        e.storage().persistent().extend_ttl(
+            &job_rating_key,
+            ACTIVE_JOB_LIFETIME_THRESHOLD,
+            ARCHIVAL_JOB_BUMP_AMOUNT,
+        );
         e.storage().persistent().set(&sum_key, &new_sum);
         e.storage().persistent().set(&count_key, &new_count);
         e.storage().persistent().extend_ttl(
@@ -11974,5 +12005,60 @@ mod test {
         client.add_to_whitelist(&admin, &vip);
         let vip_summary = client.get_user_profile_summary(&vip);
         assert_eq!(vip_summary.access_status, AccessStatus::Whitelisted);
+    }
+
+    #[test]
+    fn rate_freelancer_requires_one_completed_client_engagement() {
+        let (env, client, _, user, freelancer, native_token) = setup();
+
+        let job_id = client.post_job(
+            &user,
+            &500_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &job_id);
+
+        // A rating cannot be submitted until the engagement is completed.
+        assert!(client
+            .try_rate_freelancer(&user, &freelancer, &job_id, &400u32)
+            .is_err());
+        assert_eq!(client.get_freelancer_rating(&freelancer), (0, 0));
+
+        client.submit_job_review(&freelancer, &job_id);
+        client.approve_job(&user, &job_id);
+
+        let unrelated = Address::generate(&env);
+        assert!(client
+            .try_rate_freelancer(&unrelated, &freelancer, &job_id, &400u32)
+            .is_err());
+        assert!(client
+            .try_rate_freelancer(&freelancer, &freelancer, &job_id, &400u32)
+            .is_err());
+        assert_eq!(client.get_freelancer_rating(&freelancer), (0, 0));
+
+        client.rate_freelancer(&user, &freelancer, &job_id, &400u32);
+        assert_eq!(client.get_freelancer_rating(&freelancer), (400, 1));
+
+        assert!(client
+            .try_rate_freelancer(&user, &freelancer, &job_id, &500u32)
+            .is_err());
+        assert_eq!(client.get_freelancer_rating(&freelancer), (400, 1));
+
+        let next_job_id = client.post_job(
+            &user,
+            &500_000i128,
+            &hash(&env),
+            &32u32,
+            &0u64,
+            &native_token,
+        );
+        client.accept_job(&freelancer, &next_job_id);
+        client.submit_job_review(&freelancer, &next_job_id);
+        client.approve_job(&user, &next_job_id);
+        client.rate_freelancer(&user, &freelancer, &next_job_id, &500u32);
+        assert_eq!(client.get_freelancer_rating(&freelancer), (900, 2));
     }
 }
