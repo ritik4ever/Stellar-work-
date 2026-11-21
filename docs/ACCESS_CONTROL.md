@@ -234,7 +234,7 @@ if job.status != JobStatus::InProgress {
 | `remove_invited_freelancer(client, job_id, freelancer)` | Job Client | `client.require_auth()` + ownership check | `Unauthorized` (2) |
 | `commit_attachments_root(caller, job_id, hashes)` | Client or Admin | `caller.require_auth()` + (client or admin) | `Unauthorized` (2), `InvalidAttachmentCount` (45) |
 | `rate_job(caller, job_id, score, comment_hash)` | Client or Freelancer | `caller.require_auth()` + `require_active_access` | `InvalidStatus` (3), `Unauthorized` (2), `InvalidRating` (49) |
-| `rate_freelancer(caller, freelancer, rating)` | Any Authenticated User | `caller.require_auth()` | `InvalidRating` (49) |
+| `rate_freelancer(caller, freelancer, job_id, rating)` | Completed job's client | `caller.require_auth()` + completed job, matching freelancer, and one rating per job | `InvalidStatus` (3), `Unauthorized` (2), `InvalidRating` (49) |
 
 ### 3.7 Public Query Functions (No Auth)
 
