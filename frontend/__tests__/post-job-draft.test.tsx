@@ -34,6 +34,7 @@ vi.mock("@/lib/stellar", () => ({
   getExplorerTxUrl: (hash: string) => `https://example.test/tx/${hash}`,
   isValidStellarAddress: (address: string) =>
     /^[GC][A-Z2-7]{55}$/.test(address.trim()),
+  getCurrentOriginResult: () => null,
 }));
 
 describe("Post-job form: draft saving (FE-71)", () => {
@@ -65,6 +66,36 @@ describe("Post-job form: draft saving (FE-71)", () => {
     render(<PostJobPage />);
 
     expect(screen.getByText("Clear draft")).toBeInTheDocument();
+    expect(screen.getByLabelText(/Bonus Amount/)).toHaveProperty("value", "0");
+  });
+
+  it("autosaves bonus-only edits and restores the saved bonus", async () => {
+    const walletKey =
+      "stellarwork:post-job-draft:GWALLET000000000000000000000000000000000000000000000000000";
+    localStorage.setItem(
+      walletKey,
+      JSON.stringify({
+        amount: "5",
+        bonusAmount: "1",
+        description: "<p>Draft description</p>",
+        deadline: "",
+        tokenAddress: "GNATIVE",
+        savedAt: Date.now(),
+      }),
+    );
+
+    const { unmount } = render(<PostJobPage />);
+    const bonusInput = screen.getByLabelText(/Bonus Amount/);
+    expect(bonusInput).toHaveProperty("value", "1");
+    fireEvent.change(bonusInput, { target: { value: "2.5" } });
+
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem(walletKey)!).bonusAmount).toBe("2.5");
+    });
+
+    unmount();
+    render(<PostJobPage />);
+    expect(screen.getByLabelText(/Bonus Amount/)).toHaveProperty("value", "2.5");
   });
 
   it("clears draft and resets form when 'Clear draft' is clicked", async () => {
@@ -91,6 +122,7 @@ describe("Post-job form: draft saving (FE-71)", () => {
     });
 
     expect(localStorage.getItem(walletKey)).toBeNull();
+    expect(screen.getByLabelText(/Bonus Amount/)).toHaveProperty("value", "");
   });
 
   it("does not show draft banner when no draft exists", () => {
