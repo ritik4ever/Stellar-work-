@@ -2,7 +2,7 @@ DOCKER = docker
 COMPOSE = docker compose
 
 .PHONY: help up down logs clean build dev test-contract coverage-contract test-frontend lint-frontend typecheck
-.PHONY: help up down build test-contract coverage-contract lint-frontend dev clean monitoring-up monitoring-down
+.PHONY: help up down build test-contract coverage-contract lint-frontend dev clean monitoring-up monitoring-down 
 
 COMPOSE_MONITORING = $(COMPOSE) -f docker-compose.yml -f monitoring/docker-compose.monitoring.yml
 
